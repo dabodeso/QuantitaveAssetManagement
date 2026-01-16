@@ -1,6 +1,6 @@
 """
 Script para descargar datos de ETFs de Yahoo Finance y calcular retornos diarios.
-Cubre 10 ETFs que representan diferentes regiones y sectores del mundo.
+Cubre 14 ETFs que representan diferentes regiones y sectores del mundo.
 """
 
 import yfinance as yf
@@ -45,6 +45,9 @@ ETFS = {
     'HYG': 'Bonos High Yield (Basura)',
     'TLT': 'Bonos del Tesoro EEUU 20+ años',
     'AGG': 'Total Bond Market (Bonos Agregados)',
+    # TASA LIBRE DE RIESGO (RF)
+    'SHY': 'Tasa Libre de Riesgo - Treasury 1-3 años (iShares)',
+    # Alternativa: 'BIL': 'Tasa Libre de Riesgo - T-Bill 1-3 meses (SPDR)'
     # MATERIAS PRIMAS
     'GLD': 'Oro (SPDR Gold Trust)',
     'SLV': 'Plata (iShares Silver Trust)',
@@ -112,6 +115,48 @@ def download_etf_returns(etf_symbols, years=10):
     print(f"✓ Proceso completado. {len(returns_dict)} ETFs descargados exitosamente.")
     
     return returns_dict
+
+def calculate_excess_returns(returns_dict, rf_symbol='SHY'):
+    """
+    Calcula retornos en exceso (excess returns) restando la tasa libre de riesgo.
+    
+    Parameters:
+    -----------
+    returns_dict : dict
+        Diccionario con retornos de ETFs
+    rf_symbol : str
+        Símbolo del ETF a usar como tasa libre de riesgo (default: 'SHY')
+    
+    Returns:
+    --------
+    dict
+        Diccionario con retornos en exceso para cada ETF
+    """
+    if rf_symbol not in returns_dict:
+        print(f"⚠️  {rf_symbol} no encontrado en returns_dict. No se calcularán retornos en exceso.")
+        return None
+    
+    rf_returns = returns_dict[rf_symbol]
+    excess_returns_dict = {}
+    
+    print(f"\nCalculando retornos en exceso usando {rf_symbol} como tasa libre de riesgo...")
+    
+    for symbol, returns in returns_dict.items():
+        if symbol == rf_symbol:
+            continue  # No calcular exceso para el propio RF
+        
+        # Alinear fechas
+        aligned_data = pd.DataFrame({
+            'asset': returns,
+            'rf': rf_returns
+        }).dropna()
+        
+        if len(aligned_data) > 0:
+            excess_returns = aligned_data['asset'] - aligned_data['rf']
+            excess_returns_dict[symbol] = excess_returns
+            print(f"  ✓ {symbol}: {len(excess_returns)} observaciones")
+    
+    return excess_returns_dict
 
 def save_returns_to_dict_file(returns_dict, data_dir='data', filename='etf_returns_dict.pkl'):
     """
@@ -236,8 +281,10 @@ def plot_all_etfs_comparison(returns_dict, data_dir='data'):
     fig, ax = plt.subplots(figsize=(12, 8))
     
     # Calcular estadísticas anualizadas
-    annual_returns = returns_df.mean() * 252 * 100  # Retorno anualizado (%)
-    annual_vol = returns_df.std() * np.sqrt(252) * 100  # Volatilidad anualizada (%)
+    # Los retornos están en porcentaje, primero convertir a decimales
+    returns_decimal = returns_df / 100
+    annual_returns = returns_decimal.mean() * 252 * 100  # Retorno anualizado (%)
+    annual_vol = returns_decimal.std() * np.sqrt(252) * 100  # Volatilidad anualizada (%)
     
     scatter = ax.scatter(annual_vol, annual_returns, s=200, alpha=0.6, 
                         c=range(len(annual_returns)), cmap='viridis')
@@ -390,9 +437,11 @@ def analyze_time_series_properties(returns_dict, market_factor='SPY'):
         # ========== 3. CLUSTERING DE VOLATILIDAD Y PERSISTENCIA ==========
         try:
             # Calcular volatilidad (desviación estándar de retornos)
-            volatility = returns.std()
-            properties['volatility_daily'] = volatility
-            properties['volatility_annualized'] = volatility * np.sqrt(252)
+            # Los retornos están en porcentaje, convertir a decimales para cálculos
+            returns_decimal = returns / 100
+            volatility_daily_decimal = returns_decimal.std()
+            properties['volatility_daily'] = volatility_daily_decimal * 100  # Volatilidad diaria (%)
+            properties['volatility_annualized'] = volatility_daily_decimal * np.sqrt(252) * 100  # Volatilidad anualizada (%)
             
             # ARCH effects: correlación de retornos al cuadrado (proxy de clustering)
             returns_squared = returns ** 2
@@ -519,8 +568,11 @@ def analyze_time_series_properties(returns_dict, market_factor='SPY'):
             properties['market_rsquared'] = np.nan
         
         # ========== ESTADÍSTICAS BÁSICAS ==========
-        properties['mean_return_daily'] = returns.mean()
-        properties['mean_return_annualized'] = returns.mean() * 252
+        # Los retornos están en porcentaje
+        properties['mean_return_daily'] = returns.mean()  # Retorno diario (%)
+        # Convertir a decimales para anualizar correctamente
+        returns_decimal = returns / 100
+        properties['mean_return_annualized'] = returns_decimal.mean() * 252 * 100  # Retorno anualizado (%)
         properties['n_observations'] = len(returns)
         properties['min_return'] = returns.min()
         properties['max_return'] = returns.max()
