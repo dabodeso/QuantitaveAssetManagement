@@ -51,12 +51,18 @@ ETFS = {
     # MATERIAS PRIMAS
     'GLD': 'Oro (SPDR Gold Trust)',
     'SLV': 'Plata (iShares Silver Trust)',
-    'USO': 'Petróleo (United States Oil Fund)'
+    'USO': 'Petróleo (United States Oil Fund)',
+    'DJP': 'Bloomberg Commodity Index (iPath)',
+    # REAL ESTATE
+    'VNQ': 'REITs EEUU (Vanguard Real Estate ETF)'
 }
 
 def download_etf_returns(etf_symbols, years=10):
     """
     Descarga datos históricos de ETFs y calcula retornos diarios.
+    
+    Si un ETF no tiene datos para el período completo, intenta descargar
+    todos los datos disponibles desde su fecha de lanzamiento.
     
     Parameters:
     -----------
@@ -75,6 +81,8 @@ def download_etf_returns(etf_symbols, years=10):
     start_date = end_date - timedelta(days=years * 365)
     
     returns_dict = {}
+    failed_etfs = []
+    partial_etfs = []  # ETFs con datos pero menos del período solicitado
     
     print(f"Descargando datos de {len(etf_symbols)} ETFs desde {start_date.date()} hasta {end_date.date()}...")
     print("-" * 80)
@@ -87,9 +95,17 @@ def download_etf_returns(etf_symbols, years=10):
             ticker = yf.Ticker(symbol)
             data = ticker.history(start=start_date, end=end_date)
             
+            # Si no hay datos, intentar descargar todos los datos disponibles
             if data.empty:
-                print(f"  ⚠️  No se encontraron datos para {symbol}")
-                continue
+                print(f"  [INFO] No hay datos para el período solicitado, intentando descargar todos los datos disponibles...")
+                # Intentar desde una fecha muy antigua (1980)
+                fallback_start = datetime(1980, 1, 1)
+                data = ticker.history(start=fallback_start, end=end_date)
+                
+                if data.empty:
+                    print(f"  [WARNING] No se encontraron datos para {symbol} en ningún período")
+                    failed_etfs.append(symbol)
+                    continue
             
             # Calcular retornos diarios (porcentaje)
             # Retorno = (Precio_t - Precio_{t-1}) / Precio_{t-1} * 100
@@ -98,21 +114,51 @@ def download_etf_returns(etf_symbols, years=10):
             # Eliminar el primer valor (NaN)
             returns = data['Returns'].dropna()
             
+            # Verificar si tiene menos datos de los solicitados
+            actual_years = (returns.index[-1] - returns.index[0]).days / 365.25
+            if actual_years < years * 0.8:  # Menos del 80% del período solicitado
+                partial_etfs.append({
+                    'symbol': symbol,
+                    'years': actual_years,
+                    'requested': years
+                })
+            
             # Guardar en el diccionario
             returns_dict[symbol] = returns
             
-            print(f"  ✓ {symbol}: {len(returns)} días de retornos calculados")
+            # Mostrar información detallada
+            print(f"  [OK] {symbol}: {len(returns):,} días de retornos calculados")
             print(f"    Período: {returns.index[0].date()} a {returns.index[-1].date()}")
+            print(f"    Años disponibles: {actual_years:.1f} años (solicitados: {years} años)")
             print(f"    Retorno promedio diario: {returns.mean():.4f}%")
             print(f"    Volatilidad diaria: {returns.std():.4f}%")
+            
+            if actual_years < years * 0.8:
+                print(f"    [NOTA] Este ETF tiene menos datos de los solicitados")
             print()
             
         except Exception as e:
-            print(f"  ✗ Error descargando {symbol}: {str(e)}")
+            print(f"  [ERROR] Error descargando {symbol}: {str(e)}")
+            failed_etfs.append(symbol)
             print()
     
+    # Resumen final
     print("-" * 80)
-    print(f"✓ Proceso completado. {len(returns_dict)} ETFs descargados exitosamente.")
+    print(f"[OK] Proceso completado.")
+    print(f"  ETFs descargados exitosamente: {len(returns_dict)}/{len(etf_symbols)}")
+    
+    if partial_etfs:
+        print(f"\n  ETFs con datos parciales ({len(partial_etfs)}):")
+        for etf_info in partial_etfs:
+            print(f"    - {etf_info['symbol']}: {etf_info['years']:.1f} años (solicitados: {etf_info['requested']} años)")
+    
+    if failed_etfs:
+        print(f"\n  ETFs que no se pudieron descargar ({len(failed_etfs)}):")
+        for symbol in failed_etfs:
+            print(f"    - {symbol}")
+        print(f"\n  [WARNING] Estos ETFs no estarán disponibles en el análisis.")
+    
+    print("-" * 80)
     
     return returns_dict
 
@@ -133,7 +179,7 @@ def calculate_excess_returns(returns_dict, rf_symbol='SHY'):
         Diccionario con retornos en exceso para cada ETF
     """
     if rf_symbol not in returns_dict:
-        print(f"⚠️  {rf_symbol} no encontrado en returns_dict. No se calcularán retornos en exceso.")
+        print(f"[WARNING]  {rf_symbol} no encontrado en returns_dict. No se calcularán retornos en exceso.")
         return None
     
     rf_returns = returns_dict[rf_symbol]
@@ -154,7 +200,7 @@ def calculate_excess_returns(returns_dict, rf_symbol='SHY'):
         if len(aligned_data) > 0:
             excess_returns = aligned_data['asset'] - aligned_data['rf']
             excess_returns_dict[symbol] = excess_returns
-            print(f"  ✓ {symbol}: {len(excess_returns)} observaciones")
+            print(f"  [OK] {symbol}: {len(excess_returns)} observaciones")
     
     return excess_returns_dict
 
@@ -179,7 +225,7 @@ def save_returns_to_dict_file(returns_dict, data_dir='data', filename='etf_retur
     filepath = os.path.join(data_dir, filename)
     with open(filepath, 'wb') as f:
         pickle.dump(returns_dict, f)
-    print(f"\n✓ Diccionario guardado en {filepath}")
+    print(f"\n[OK] Diccionario guardado en {filepath}")
 
 def plot_all_etfs_comparison(returns_dict, data_dir='data'):
     """
@@ -225,7 +271,7 @@ def plot_all_etfs_comparison(returns_dict, data_dir='data'):
     
     filepath = os.path.join(data_dir, '1_retornos_acumulados.png')
     plt.savefig(filepath, dpi=300, bbox_inches='tight')
-    print(f"   ✓ Guardado: {filepath}")
+    print(f"   [OK] Guardado: {filepath}")
     plt.close()
     
     # 2. Gráfico 2: Matriz de correlación
@@ -243,7 +289,7 @@ def plot_all_etfs_comparison(returns_dict, data_dir='data'):
     
     filepath = os.path.join(data_dir, '2_matriz_correlacion.png')
     plt.savefig(filepath, dpi=300, bbox_inches='tight')
-    print(f"   ✓ Guardado: {filepath}")
+    print(f"   [OK] Guardado: {filepath}")
     plt.close()
     
     # 3. Gráfico 3: Distribución de retornos (boxplot)
@@ -262,7 +308,7 @@ def plot_all_etfs_comparison(returns_dict, data_dir='data'):
     
     filepath = os.path.join(data_dir, '3_distribucion_retornos.png')
     plt.savefig(filepath, dpi=300, bbox_inches='tight')
-    print(f"   ✓ Guardado: {filepath}")
+    print(f"   [OK] Guardado: {filepath}")
     plt.close()
     
     # 4. Gráfico 4: Scatter plots de todos contra todos (matriz de dispersión)
@@ -273,7 +319,7 @@ def plot_all_etfs_comparison(returns_dict, data_dir='data'):
     
     filepath = os.path.join(data_dir, '4_matriz_scatter.png')
     plt.savefig(filepath, dpi=300, bbox_inches='tight')
-    print(f"   ✓ Guardado: {filepath}")
+    print(f"   [OK] Guardado: {filepath}")
     plt.close()
     
     # 5. Gráfico 5: Retorno vs Volatilidad (Risk-Return)
@@ -290,9 +336,16 @@ def plot_all_etfs_comparison(returns_dict, data_dir='data'):
                         c=range(len(annual_returns)), cmap='viridis')
     
     # Etiquetar cada punto
-    for i, symbol in enumerate(annual_returns.index):
-        ax.annotate(symbol, (annual_vol[i], annual_returns[i]), 
-                   fontsize=10, ha='center', va='bottom', fontweight='bold')
+    # IMPORTANTE: usar las etiquetas del índice (símbolos), no índices enteros
+    for symbol in annual_returns.index:
+        ax.annotate(
+            symbol,
+            (annual_vol.loc[symbol], annual_returns.loc[symbol]),
+            fontsize=10,
+            ha='center',
+            va='bottom',
+            fontweight='bold'
+        )
     
     ax.set_xlabel('Volatilidad Anualizada (%)', fontsize=12)
     ax.set_ylabel('Retorno Anualizado (%)', fontsize=12)
@@ -304,7 +357,7 @@ def plot_all_etfs_comparison(returns_dict, data_dir='data'):
     
     filepath = os.path.join(data_dir, '5_risk_return.png')
     plt.savefig(filepath, dpi=300, bbox_inches='tight')
-    print(f"   ✓ Guardado: {filepath}")
+    print(f"   [OK] Guardado: {filepath}")
     plt.close()
     
     # 6. Gráfico 6: Series temporales de retornos diarios (todas superpuestas)
@@ -324,10 +377,10 @@ def plot_all_etfs_comparison(returns_dict, data_dir='data'):
     
     filepath = os.path.join(data_dir, '6_retornos_diarios.png')
     plt.savefig(filepath, dpi=300, bbox_inches='tight')
-    print(f"   ✓ Guardado: {filepath}")
+    print(f"   [OK] Guardado: {filepath}")
     plt.close()
     
-    print("\n✓ Todos los gráficos generados exitosamente en el directorio 'data/'")
+    print("\n[OK] Todos los gráficos generados exitosamente en el directorio 'data/'")
 
 def analyze_time_series_properties(returns_dict, market_factor='SPY'):
     """
@@ -365,7 +418,7 @@ def analyze_time_series_properties(returns_dict, market_factor='SPY'):
         returns = returns_df[symbol].dropna()
         
         if len(returns) < 100:  # Necesitamos suficientes datos
-            print(f"  ⚠️  Datos insuficientes para {symbol}")
+            print(f"  [WARNING]  Datos insuficientes para {symbol}")
             continue
         
         properties = {'ETF': symbol}
@@ -389,7 +442,7 @@ def analyze_time_series_properties(returns_dict, market_factor='SPY'):
                 properties['kpss_pvalue'] = np.nan
                 properties['kpss_stationary'] = np.nan
         except Exception as e:
-            print(f"    ⚠️  Error en tests de estacionariedad: {e}")
+            print(f"    [WARNING]  Error en tests de estacionariedad: {e}")
             properties['adf_statistic'] = np.nan
             properties['adf_pvalue'] = np.nan
             properties['adf_stationary'] = np.nan
@@ -422,7 +475,7 @@ def analyze_time_series_properties(returns_dict, market_factor='SPY'):
                 properties['ljung_box_pvalue'] = np.nan
                 properties['has_autocorrelation'] = np.nan
         except Exception as e:
-            print(f"    ⚠️  Error en análisis de autocorrelación: {e}")
+            print(f"    [WARNING]  Error en análisis de autocorrelación: {e}")
             properties['acf_lag1'] = np.nan
             properties['acf_lag5'] = np.nan
             properties['acf_lag10'] = np.nan
@@ -457,7 +510,7 @@ def analyze_time_series_properties(returns_dict, market_factor='SPY'):
             vol_long = returns.iloc[mid_point:].std()
             properties['volatility_persistence_ratio'] = vol_long / vol_short if vol_short > 0 else np.nan
         except Exception as e:
-            print(f"    ⚠️  Error en análisis de volatilidad: {e}")
+            print(f"    [WARNING]  Error en análisis de volatilidad: {e}")
             properties['volatility_daily'] = np.nan
             properties['volatility_annualized'] = np.nan
             properties['arch_effect_lag1'] = np.nan
@@ -473,7 +526,7 @@ def analyze_time_series_properties(returns_dict, market_factor='SPY'):
             properties['is_leptokurtic'] = properties['kurtosis'] > 3  # Colas pesadas
             properties['is_negatively_skewed'] = properties['skewness'] < 0  # Sesgo negativo
         except Exception as e:
-            print(f"    ⚠️  Error en análisis de momentos: {e}")
+            print(f"    [WARNING]  Error en análisis de momentos: {e}")
             properties['skewness'] = np.nan
             properties['kurtosis'] = np.nan
             properties['excess_kurtosis'] = np.nan
@@ -504,7 +557,7 @@ def analyze_time_series_properties(returns_dict, market_factor='SPY'):
             properties['nonlinearity_correlation'] = corr_linear
             properties['has_nonlinearity'] = abs(corr_linear) > 0.1
         except Exception as e:
-            print(f"    ⚠️  Error en análisis de régimen: {e}")
+            print(f"    [WARNING]  Error en análisis de régimen: {e}")
             properties['regime_shift_tstat'] = np.nan
             properties['regime_shift_pvalue'] = np.nan
             properties['has_regime_shift'] = np.nan
@@ -561,7 +614,7 @@ def analyze_time_series_properties(returns_dict, market_factor='SPY'):
                 properties['market_correlation'] = 1.0 if symbol == market_factor else np.nan
                 properties['market_rsquared'] = 1.0 if symbol == market_factor else np.nan
         except Exception as e:
-            print(f"    ⚠️  Error en análisis de factores de mercado: {e}")
+            print(f"    [WARNING]  Error en análisis de factores de mercado: {e}")
             properties['market_beta'] = np.nan
             properties['market_alpha'] = np.nan
             properties['market_correlation'] = np.nan
@@ -579,7 +632,7 @@ def analyze_time_series_properties(returns_dict, market_factor='SPY'):
         properties['median_return'] = returns.median()
         
         properties_list.append(properties)
-        print(f"  ✓ {symbol} analizado")
+        print(f"  [OK] {symbol} analizado")
     
     # Crear DataFrame
     properties_df = pd.DataFrame(properties_list)
@@ -644,7 +697,7 @@ def main():
     for symbol, returns in returns_dict.items():
         filepath = os.path.join(data_dir, f'{symbol}_returns.csv')
         returns.to_csv(filepath, header=['Returns'])
-    print("✓ Archivos CSV guardados")
+    print("[OK] Archivos CSV guardados")
     
     # Generar gráficos comparativos
     plot_all_etfs_comparison(returns_dict, data_dir)
@@ -655,7 +708,7 @@ def main():
     # Guardar el DataFrame de propiedades
     properties_filepath = os.path.join(data_dir, 'etf_properties_analysis.csv')
     properties_df.to_csv(properties_filepath, index=False)
-    print(f"\n✓ Propiedades guardadas en {properties_filepath}")
+    print(f"\n[OK] Propiedades guardadas en {properties_filepath}")
     
     # Imprimir el DataFrame completo
     print("\n" + "=" * 80)

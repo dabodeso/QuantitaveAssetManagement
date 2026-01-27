@@ -1,0 +1,57 @@
+# Archivos de datos grandes (exceden límite de GitHub 100MB)
+data/ml_dataset.csv
+data/ml_dataset.pkl
+data/etf_returns_dict.pkl
+data/backtest_results.pkl
+data/portfolio_weights_latest.pkl
+
+# Modelos entrenados
+models/*.pkl
+models/*.json
+
+# Visualizaciones
+data/visualizations/*.png
+data/visualizations/*.jpg
+data/visualizations/*.pdf
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Entornos virtuales
+venv/
+env/
+ENV/
+.venv
